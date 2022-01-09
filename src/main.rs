@@ -87,6 +87,10 @@ impl M3U8 {
             fs::create_dir_all(&self.output).unwrap();
         }
         let list = M3U8::load_m3u8(&self.path);
+        if list.len() == 0 {
+            println!("m3u8 format is invalid");
+            process::exit(0);
+        }
         let mut thread_pool: Vec<thread::JoinHandle<_>> = vec![];
         let iter = list.chunks(list.len() / (thread_num as usize));
         let (tx, rx): (Sender<(String, Vec<u8>)>, Receiver<(String, Vec<u8>)>) = mpsc::channel();
