@@ -11,16 +11,18 @@ struct M3U8 {
     path: String,
     base_url: String,
     output: String,
-    header: String
+    header: String,
+    resume: bool
 }
 
 impl M3U8 {
-    fn new(path: &str, base_url: &str, output: &str, header: &str) -> M3U8 {
+    fn new(path: &str, base_url: &str, output: &str, header: &str, resume: bool) -> M3U8 {
         M3U8 {
             path: String::from(path),
             base_url: String::from(base_url),
             output: String::from(output),
-            header: String::from(header)
+            header: String::from(header),
+            resume: resume
         }
     }
 
@@ -63,7 +65,7 @@ impl M3U8 {
         list
     }
 
-    fn download_ts<'a>(base_url: &str, list: &[String], tx: &Sender<(String, Vec<u8>)>, header: &[(String, String)])
+    fn download_ts(base_url: &str, list: &[String], tx: &Sender<(String, Vec<u8>)>, header: &[(String, String)])
     {
         let client = reqwest::blocking::Client::new();
 
@@ -74,23 +76,52 @@ impl M3U8 {
                 body = body.header(HeaderName::from_bytes(&h.0.as_bytes()).unwrap(), 
                              HeaderValue::from_bytes(&h.1.as_bytes()).unwrap());
             }
-            let body = body.send().unwrap().bytes().unwrap();
-            let content: Result<Vec<_>, _> = body.bytes().collect();
-            if let Ok(data) = content {
-                tx.send((String::from(ts), data)).unwrap();
+
+            match body.send() {
+                Err(e) => {
+                    // deal with the http request error, try our best to download more ts files.
+                    println!("ts: {} download failed, error: {}", &ts, e);
+                    continue;
+                },
+                Ok(resp) => {
+                    let body = resp.bytes().unwrap();
+                    let content: Result<Vec<_>, _> = body.bytes().collect();
+                    if let Ok(data) = content {
+                        tx.send((String::from(ts), data)).unwrap();
+                    }
+                }
             }
         }
+    }
+
+    pub fn check_exist(&self, ts: &str) -> bool {
+        let root_path = Path::new(&self.output);
+        return root_path.join(&ts).exists();
     }
 
     pub fn download(&self, thread_num: i32) {
         if !Path::new(&self.output).exists() {
             fs::create_dir_all(&self.output).unwrap();
         }
-        let list = M3U8::load_m3u8(&self.path);
+        let mut list = M3U8::load_m3u8(&self.path);
         if list.len() == 0 {
             println!("m3u8 format is invalid");
             process::exit(0);
         }
+
+        // Don't download the downloaded file if the file already existed.
+        if self.resume {
+            list = list.iter()
+                    .filter(|ts| !self.check_exist(ts))
+                    .map(|ts| ts.to_owned())
+                    .collect();
+        }
+
+        if list.len() == 0{
+           println!("Done!");
+           process::exit(0);
+        }
+
         let mut thread_pool: Vec<thread::JoinHandle<_>> = vec![];
         let iter = list.chunks(list.len() / (thread_num as usize));
         let (tx, rx): (Sender<(String, Vec<u8>)>, Receiver<(String, Vec<u8>)>) = mpsc::channel();
@@ -115,7 +146,6 @@ impl M3U8 {
             let header = Arc::clone(&header);
             thread_pool.push(thread::spawn( move || {
                 M3U8::download_ts(&base_url, &data, &tx, &header);
-                drop(tx);
             }));
         }
 
@@ -137,6 +167,7 @@ fn main() {
         .arg(arg!(-d --dest <DIR> "the path of output dir").required(false))
         .arg(arg!(-j --j <N> "multi-thread number, default: 8").required(false))
         .arg(arg!(--header <JSON_FILE> "http request header, you can input a json file to declare it.").required(false))
+        .arg(arg!(-r --resume "resume from break-point").required(false).takes_value(false))
         .get_matches();
 
     let file_path = matches.value_of("file").unwrap();
@@ -144,7 +175,8 @@ fn main() {
     let dest = matches.value_of("dest").unwrap_or("./");
     let thread_num: i32 = matches.value_of_t("j").unwrap_or(8);
     let header = matches.value_of("header").unwrap_or("");
+    let resume = matches.is_present("resume");
 
-    let config: M3U8 = M3U8::new(file_path,url, dest, header);
+    let config: M3U8 = M3U8::new(file_path,url, dest, header, resume);
     config.download(thread_num);
 }
