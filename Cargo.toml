@@ -12,3 +12,6 @@ reqwest = { version = "~0.11.8", features = ["blocking"] }
 url = "~2.2.2"
 pbr = "~1.0.4"
 serde_json = "*"
+
+[profile.release]
+lto = true
