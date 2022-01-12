@@ -77,17 +77,21 @@ impl M3U8 {
                              HeaderValue::from_bytes(&h.1.as_bytes()).unwrap());
             }
 
+            // deal with the http request error, try our best to download more ts files.
             match body.send() {
                 Err(e) => {
-                    // deal with the http request error, try our best to download more ts files.
                     println!("ts: {} download failed, error: {}", &ts, e);
                     continue;
                 },
                 Ok(resp) => {
-                    let body = resp.bytes().unwrap();
-                    let content: Result<Vec<_>, _> = body.bytes().collect();
-                    if let Ok(data) = content {
-                        tx.send((String::from(ts), data)).unwrap();
+                    if let Ok(body) = resp.bytes() {
+                        let content: Result<Vec<_>, _> = body.bytes().collect();
+                        if let Ok(data) = content {
+                            tx.send((String::from(ts), data)).unwrap();
+                        }
+                    } else {
+                        println!("ts: {} download failed, parse error", &ts);
+                        continue;
                     }
                 }
             }
