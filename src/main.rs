@@ -1,10 +1,23 @@
 use clap::{arg, App};
-use std::{fs, process, path::Path, io::Read, thread, sync::{mpsc::{self, Receiver, Sender}, Arc}};
-use regex::{Regex};
-use reqwest::{self, header::{HeaderName, HeaderValue}};
-use url::{Url};
 use pbr::ProgressBar;
+use regex::Regex;
+use reqwest::{
+    self,
+    header::{HeaderName, HeaderValue},
+};
 use serde_json;
+use std::{
+    fs,
+    io::Read,
+    path::Path,
+    process,
+    sync::{
+        mpsc::{self, Receiver, Sender},
+        Arc,
+    },
+    thread,
+};
+use url::Url;
 
 #[derive(Debug)]
 struct M3U8 {
@@ -12,7 +25,7 @@ struct M3U8 {
     base_url: String,
     output: String,
     header: String,
-    resume: bool
+    resume: bool,
 }
 
 impl M3U8 {
@@ -22,7 +35,7 @@ impl M3U8 {
             base_url: String::from(base_url),
             output: String::from(output),
             header: String::from(header),
-            resume: resume
+            resume: resume,
         }
     }
 
@@ -40,8 +53,8 @@ impl M3U8 {
                             headers.push((String::from(k), String::from(s)));
                         }
                     }
-                },
-                _ => ()
+                }
+                _ => (),
             }
             println!("header: {:?}", headers);
             headers
@@ -65,16 +78,22 @@ impl M3U8 {
         list
     }
 
-    fn download_ts(base_url: &str, list: &[String], tx: &Sender<(String, Vec<u8>)>, header: &[(String, String)])
-    {
+    fn download_ts(
+        base_url: &str,
+        list: &[String],
+        tx: &Sender<(String, Vec<u8>)>,
+        header: &[(String, String)],
+    ) {
         let client = reqwest::blocking::Client::new();
 
         for ts in list {
             let url = Url::parse(base_url).unwrap().join(&ts).unwrap();
             let mut body = client.get(url.as_str());
             for h in header {
-                body = body.header(HeaderName::from_bytes(&h.0.as_bytes()).unwrap(), 
-                             HeaderValue::from_bytes(&h.1.as_bytes()).unwrap());
+                body = body.header(
+                    HeaderName::from_bytes(&h.0.as_bytes()).unwrap(),
+                    HeaderValue::from_bytes(&h.1.as_bytes()).unwrap(),
+                );
             }
 
             // deal with the http request error, try our best to download more ts files.
@@ -82,7 +101,7 @@ impl M3U8 {
                 Err(e) => {
                     println!("ts: {} download failed, error: {}", &ts, e);
                     continue;
-                },
+                }
                 Ok(resp) => {
                     if let Ok(body) = resp.bytes() {
                         let content: Result<Vec<_>, _> = body.bytes().collect();
@@ -100,7 +119,23 @@ impl M3U8 {
 
     pub fn check_exist(&self, ts: &str) -> bool {
         let root_path = Path::new(&self.output);
-        return root_path.join(&ts).exists();
+        let file_path = root_path.join(ts);
+        if file_path.exists() {
+            // check the file size, if the file size < 10k, we think the file is invalid.
+            if let Ok(meta) = fs::metadata(&file_path) {
+                if meta.len() < 10240 {
+                    println!("{} is invalid, remove it.", ts);
+                    fs::remove_file(&file_path).unwrap();
+                    false
+                } else {
+                    true
+                }
+            } else {
+                false
+            }
+        } else {
+            false
+        }
     }
 
     pub fn download(&self, thread_num: i32) {
@@ -115,15 +150,16 @@ impl M3U8 {
 
         // Don't download the downloaded file if the file already existed.
         if self.resume {
-            list = list.iter()
-                    .filter(|ts| !self.check_exist(ts))
-                    .map(|ts| ts.to_owned())
-                    .collect();
+            list = list
+                .iter()
+                .filter(|ts| !self.check_exist(ts))
+                .map(|ts| ts.to_owned())
+                .collect();
         }
 
-        if list.len() == 0{
-           println!("Done!");
-           process::exit(0);
+        if list.len() == 0 {
+            println!("Done!");
+            process::exit(0);
         }
 
         let mut thread_pool: Vec<thread::JoinHandle<_>> = vec![];
@@ -131,7 +167,7 @@ impl M3U8 {
         let (tx, rx): (Sender<(String, Vec<u8>)>, Receiver<(String, Vec<u8>)>) = mpsc::channel();
         let output_ref = self.output.clone();
         let total = list.len();
-        thread_pool.push(thread::spawn( move || {
+        thread_pool.push(thread::spawn(move || {
             let mut pb = ProgressBar::new(total as u64);
             for data in rx {
                 let path = Path::new(&output_ref).join(&data.0);
@@ -140,7 +176,7 @@ impl M3U8 {
             }
             pb.finish_print("Done!");
         }));
-        
+
         let base_url = Arc::new(self.base_url.clone());
         let header = Arc::new(self.parse_header());
         for i in iter {
@@ -148,7 +184,7 @@ impl M3U8 {
             let tx = tx.clone();
             let base_url = Arc::clone(&base_url);
             let header = Arc::clone(&header);
-            thread_pool.push(thread::spawn( move || {
+            thread_pool.push(thread::spawn(move || {
                 M3U8::download_ts(&base_url, &data, &tx, &header);
             }));
         }
@@ -181,6 +217,6 @@ fn main() {
     let header = matches.value_of("header").unwrap_or("");
     let resume = matches.is_present("resume");
 
-    let config: M3U8 = M3U8::new(file_path,url, dest, header, resume);
+    let config: M3U8 = M3U8::new(file_path, url, dest, header, resume);
     config.download(thread_num);
 }
